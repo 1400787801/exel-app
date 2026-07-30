@@ -169,27 +169,40 @@ def read_uploaded_file(uploaded_file, key_suffix=""):
     return pd.read_excel(xl_file, sheet_name=selected_sheet, header=None)
 
 
-def build_excel_bytes(df, sheet_name="Sheet1"):
-    """导出 Excel 统一处理（开启筛选、首行冻结、自动适化列宽）"""
+def build_excel_bytes(df_dict_or_df, sheet_name="Sheet1"):
+    """导出 Excel 统一处理（支持单/多 Sheet，自动开启筛选、首行冻结、适应列宽）"""
+    if isinstance(df_dict_or_df, pd.DataFrame):
+        sheets = {sheet_name: df_dict_or_df}
+    else:
+        sheets = df_dict_or_df
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        worksheet = writer.sheets[sheet_name]
+        for s_name, df in sheets.items():
+            df.to_excel(writer, index=False, sheet_name=s_name)
+            worksheet = writer.sheets[s_name]
 
-        # 1. 开启 Excel 自动筛选
-        worksheet.auto_filter.ref = worksheet.dimensions
-        # 2. 冻结首行
-        worksheet.freeze_panes = "A2"
+            # 1. 开启 Excel 自动筛选
+            worksheet.auto_filter.ref = worksheet.dimensions
+            # 2. 冻结首行
+            worksheet.freeze_panes = "A2"
 
-        # 3. 自动适应列宽
-        for col in worksheet.columns:
-            max_len = max(get_display_width(cell.value) for cell in col)
-            col_letter = get_column_letter(col[0].column)
-            worksheet.column_dimensions[col_letter].width = max(
-                max_len + 5, 15
-            )
+            # 3. 自动适应列宽
+            for col in worksheet.columns:
+                max_len = max(get_display_width(cell.value) for cell in col)
+                col_letter = get_column_letter(col[0].column)
+                worksheet.column_dimensions[col_letter].width = max(
+                    max_len + 5, 15
+                )
 
     return output.getvalue()
+
+
+def smart_round(x):
+    """智能数值舍入"""
+    if abs(x - round(x)) < 1e-6:
+        return int(round(x))
+    return round(x, 2)
 
 
 # ==========================================
@@ -284,36 +297,66 @@ if "Cable Reel" in app_mode:
                 for c, raw_date in col_date_map.items():
                     if c < len(row_values):
                         num = safe_convert_number(row_values[c])
+                        # 仅提取大于 0 的有效数值
                         if num is not None and num > 0:
                             monday_date = get_monday_date(raw_date)
                             raw_records.append(
                                 {
                                     "Floor nozzle": floor_nozzle_val,
                                     "FullName": full_name_val,
-                                    "Demand Time": monday_date,
+                                    "Daily Date": raw_date,
+                                    "Monday Date": monday_date,
                                     "Released": num,
                                 }
                             )
 
             if raw_records:
                 df_temp = pd.DataFrame(raw_records).astype(
-                    {"Floor nozzle": str, "FullName": str, "Demand Time": str}
+                    {
+                        "Floor nozzle": str,
+                        "FullName": str,
+                        "Daily Date": str,
+                        "Monday Date": str,
+                    }
                 )
                 df_temp["Released"] = pd.to_numeric(df_temp["Released"], errors="coerce")
 
-                df_final = df_temp.groupby(
-                    ["Floor nozzle", "FullName", "Demand Time"], as_index=False
-                )["Released"].sum()
-
-                df_final["Released"] = df_final["Released"].apply(
-                    lambda x: int(round(x)) if abs(x - round(x)) < 1e-6 else round(x, 2)
+                # --- 按周汇总 ---
+                df_weekly = (
+                    df_temp.groupby(
+                        ["Floor nozzle", "FullName", "Monday Date"], as_index=False
+                    )["Released"]
+                    .sum()
                 )
-                df_final = df_final[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+                df_weekly["Released"] = df_weekly["Released"].apply(smart_round)
+                df_weekly = df_weekly[df_weekly["Released"] > 0]
+                df_weekly = df_weekly.rename(columns={"Monday Date": "Demand Time"})
+                df_weekly = df_weekly[["Floor nozzle", "FullName", "Demand Time", "Released"]]
 
-                st.subheader("📋 转换结果预览 (Cable Reel 欠料格式)")
-                st.dataframe(df_final, use_container_width=True)
+                # --- 按天汇总 ---
+                df_daily = (
+                    df_temp.groupby(
+                        ["Floor nozzle", "FullName", "Daily Date"], as_index=False
+                    )["Released"]
+                    .sum()
+                )
+                df_daily["Released"] = df_daily["Released"].apply(smart_round)
+                df_daily = df_daily[df_daily["Released"] > 0]
+                df_daily = df_daily.rename(columns={"Daily Date": "Demand Time"})
+                df_daily = df_daily[["Floor nozzle", "FullName", "Demand Time", "Released"]]
 
-                excel_bytes = build_excel_bytes(df_final)
+                st.subheader("📋 转换结果预览 (Cable Reel 格式)")
+                tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
+
+                with tab_weekly:
+                    st.dataframe(df_weekly, use_container_width=True)
+
+                with tab_daily:
+                    st.dataframe(df_daily, use_container_width=True)
+
+                excel_bytes = build_excel_bytes(
+                    {"按周汇总": df_weekly, "按天汇总": df_daily}
+                )
                 now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                 st.download_button(
                     label="✅ 下载 Cable Reel 导出 Excel (带筛选)",
@@ -334,12 +377,6 @@ if "Cable Reel" in app_mode:
 # ------------------------------------------
 else:
     st.subheader("🧹 Floor Nozzle / SBD 欠料格式转换")
-
-    date_mode = st.sidebar.radio(
-        "Demand Time 归集模式：",
-        ["按天保留明细 (具体排产日期)", "按周一归集汇总 (同一周内累加到周一)"],
-        index=0,
-    )
 
     file2 = st.file_uploader(
         "请上传 Floor Nozzle / SBD 原始文件 (.xlsx / .xls / .csv)",
@@ -386,7 +423,7 @@ else:
                 if not any(row_vals) or "计划库存" in row_str:
                     continue
 
-                # 判定 A 模式（同行）或 B 模式（上一行）
+                # 判定同行或上一行模式
                 nozzle_same = row_vals[0]
                 desc_same = row_vals[1]
                 boxing_same = row_vals[2] if len(row_vals) > 2 else ""
@@ -434,21 +471,17 @@ else:
                 for c, date_str in col_date_map.items():
                     if c < len(row_vals):
                         num = safe_convert_number(row_vals[c])
+                        # 仅提取大于 0 的有效数值
                         if num is not None and num > 0:
-                            demand_time = (
-                                get_monday_date(date_str)
-                                if "周一" in date_mode
-                                else date_str
-                            )
+                            monday_date = get_monday_date(date_str)
                             records.append(
                                 {
                                     "Floor nozzle": nozzle_val,
                                     "Description": desc_val,
                                     "分箱情况": boxing_val,
-                                    "Demand Time": demand_time,
-                                    "Released": int(num)
-                                    if num.is_integer()
-                                    else num,
+                                    "Daily Date": date_str,
+                                    "Monday Date": monday_date,
+                                    "Released": num,
                                 }
                             )
 
@@ -458,23 +491,54 @@ else:
                         "Floor nozzle": str,
                         "Description": str,
                         "分箱情况": str,
-                        "Demand Time": str,
+                        "Daily Date": str,
+                        "Monday Date": str,
                     }
                 )
+                df_out["Released"] = pd.to_numeric(df_out["Released"], errors="coerce")
 
-                df_final = df_out.groupby(
-                    ["Floor nozzle", "Description", "分箱情况", "Demand Time"],
-                    as_index=False,
-                )["Released"].sum()
-
-                df_final = df_final.sort_values(
+                # --- 按周汇总 ---
+                df_weekly = (
+                    df_out.groupby(
+                        ["Floor nozzle", "Description", "分箱情况", "Monday Date"],
+                        as_index=False,
+                    )["Released"]
+                    .sum()
+                )
+                df_weekly["Released"] = df_weekly["Released"].apply(smart_round)
+                df_weekly = df_weekly[df_weekly["Released"] > 0]
+                df_weekly = df_weekly.rename(columns={"Monday Date": "Demand Time"})
+                df_weekly = df_weekly.sort_values(
                     by=["Floor nozzle", "Demand Time"]
                 ).reset_index(drop=True)
 
-                st.subheader("📋 转换结果预览（完整 5 列格式）")
-                st.dataframe(df_final, use_container_width=True)
+                # --- 按天汇总 ---
+                df_daily = (
+                    df_out.groupby(
+                        ["Floor nozzle", "Description", "分箱情况", "Daily Date"],
+                        as_index=False,
+                    )["Released"]
+                    .sum()
+                )
+                df_daily["Released"] = df_daily["Released"].apply(smart_round)
+                df_daily = df_daily[df_daily["Released"] > 0]
+                df_daily = df_daily.rename(columns={"Daily Date": "Demand Time"})
+                df_daily = df_daily.sort_values(
+                    by=["Floor nozzle", "Demand Time"]
+                ).reset_index(drop=True)
 
-                excel_bytes = build_excel_bytes(df_final)
+                st.subheader("📋 转换结果预览（Floor Nozzle / SBD 格式）")
+                tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
+
+                with tab_weekly:
+                    st.dataframe(df_weekly, use_container_width=True)
+
+                with tab_daily:
+                    st.dataframe(df_daily, use_container_width=True)
+
+                excel_bytes = build_excel_bytes(
+                    {"按周汇总": df_weekly, "按天汇总": df_daily}
+                )
                 now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                 st.download_button(
                     label="✅ 下载 Floor Nozzle 导出 Excel (带筛选)",
