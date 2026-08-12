@@ -335,6 +335,8 @@ if "Cable Reel" in app_mode:
                 df_weekly = df_weekly[df_weekly["Released"] > 0]
                 df_weekly = df_weekly.rename(columns={"Monday Date": "Demand Time"})
                 df_weekly = df_weekly[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+                df_weekly["_sort_date"] = pd.to_datetime(df_weekly["Demand Time"])
+                df_weekly = df_weekly.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 # --- 按天汇总 ---
                 df_daily = (
@@ -347,6 +349,8 @@ if "Cable Reel" in app_mode:
                 df_daily = df_daily[df_daily["Released"] > 0]
                 df_daily = df_daily.rename(columns={"Daily Date": "Demand Time"})
                 df_daily = df_daily[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+                df_daily["_sort_date"] = pd.to_datetime(df_daily["Demand Time"])
+                df_daily = df_daily.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 st.subheader("📋 转换结果预览 (Cable Reel 格式)")
                 tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
@@ -509,9 +513,8 @@ elif "Floor Nozzle" in app_mode:
                 df_weekly["Released"] = df_weekly["Released"].apply(smart_round)
                 df_weekly = df_weekly[df_weekly["Released"] > 0]
                 df_weekly = df_weekly.rename(columns={"Monday Date": "Demand Time"})
-                df_weekly = df_weekly.sort_values(
-                    by=["Floor nozzle", "Demand Time"]
-                ).reset_index(drop=True)
+                df_weekly["_sort_date"] = pd.to_datetime(df_weekly["Demand Time"])
+                df_weekly = df_weekly.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 # --- 按天汇总 ---
                 df_daily = (
@@ -524,9 +527,8 @@ elif "Floor Nozzle" in app_mode:
                 df_daily["Released"] = df_daily["Released"].apply(smart_round)
                 df_daily = df_daily[df_daily["Released"] > 0]
                 df_daily = df_daily.rename(columns={"Daily Date": "Demand Time"})
-                df_daily = df_daily.sort_values(
-                    by=["Floor nozzle", "Demand Time"]
-                ).reset_index(drop=True)
+                df_daily["_sort_date"] = pd.to_datetime(df_daily["Demand Time"])
+                df_daily = df_daily.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 st.subheader("📋 转换结果预览（Floor Nozzle / SBD 格式）")
                 tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
@@ -660,6 +662,10 @@ else:
                 df_weekly["Released"] = df_weekly["Released"].apply(smart_round)
                 df_weekly = df_weekly[df_weekly["Released"] > 0].rename(columns={"Monday Date": "Demand Time"})
                 df_weekly = df_weekly[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+                
+                # 同一物料号按日期升序排列
+                df_weekly["_sort_date"] = pd.to_datetime(df_weekly["Demand Time"])
+                df_weekly = df_weekly.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 # 按天汇总
                 df_daily = (
@@ -669,6 +675,10 @@ else:
                 df_daily["Released"] = df_daily["Released"].apply(smart_round)
                 df_daily = df_daily[df_daily["Released"] > 0].rename(columns={"Daily Date": "Demand Time"})
                 df_daily = df_daily[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+
+                # 同一物料号按日期升序排列
+                df_daily["_sort_date"] = pd.to_datetime(df_daily["Demand Time"])
+                df_daily = df_daily.sort_values(by=["Floor nozzle", "_sort_date"]).drop(columns=["_sort_date"]).reset_index(drop=True)
 
                 st.subheader("📋 墙挂小附件 - 计划提取成功预览")
                 tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
