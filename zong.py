@@ -16,11 +16,15 @@ st.sidebar.header("⚙️ 功能与规则设置")
 
 app_mode = st.sidebar.radio(
     "请选择转换模式：",
-    ["🔌 Cable Reel 格式 (4列明细)", "🧹 Floor Nozzle / SBD 格式 (5列明细)"],
+    [
+        "🔌 Cable Reel 格式 (4列明细)",
+        "🧹 Floor Nozzle / SBD 格式 (5列明细)",
+        "📌 墙挂小附件计划 格式 (只统计计划)",
+    ],
 )
 
 st.sidebar.markdown("---")
-digits_only_nozzle = st.sidebar.checkbox("Floor nozzle 仅保留数字", value=False)
+digits_only_nozzle = st.sidebar.checkbox("Floor nozzle / 料号仅保留数字", value=False)
 
 
 # ==========================================
@@ -35,30 +39,30 @@ def get_display_width(val):
 
 
 def get_monday_date(date_str):
-    """计算所在周周一的日期 (YYYY-MM-DD)"""
+    """计算所在周周一的日期 (格式: YYYY/M/D)"""
     if not date_str:
         return ""
     try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        dt = pd.to_datetime(date_str)
         monday_dt = dt - timedelta(days=dt.weekday())
-        return monday_dt.strftime("%Y-%m-%d")
-    except ValueError:
+        return f"{monday_dt.year}/{monday_dt.month}/{monday_dt.day}"
+    except Exception:
         return date_str
 
 
 def parse_header_date(val, force_year=None):
-    """强大的日期表头解析函数（支持标准格式、Excel序列号、中文年月日及月日短格式）"""
+    """强大的日期表头解析函数（支持标准格式、Excel序列号、中文年月日及月日短格式，统一输出 YYYY/M/D 格式）"""
     if pd.isna(val):
         return None
 
     if isinstance(val, (pd.Timestamp, datetime)):
-        return val.strftime("%Y-%m-%d")
+        return f"{val.year}/{val.month}/{val.day}"
 
     try:
         num_val = float(val)
         if 30000 < num_val < 60000:
             d = pd.to_datetime(num_val, unit="D", origin="1899-12-30")
-            return d.strftime("%Y-%m-%d")
+            return f"{d.year}/{d.month}/{d.day}"
     except (ValueError, TypeError):
         pass
 
@@ -77,24 +81,24 @@ def parse_header_date(val, force_year=None):
         year_num = int(y) if y else curr_year
         m_num, d_num = int(m), int(d)
         if 1 <= m_num <= 12 and 1 <= d_num <= 31:
-            return f"{year_num:04d}-{m_num:02d}-{d_num:02d}"
+            return f"{year_num}/{m_num}/{d_num}"
 
-    # 正则：YYYY-MM-DD
+    # 正则：YYYY-MM-DD 或 YYYY/MM/DD
     m_full = re.search(
         r"(?<!\d)(\d{4})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])(?!\d)",
         val_str,
     )
     if m_full:
         y, m, d = m_full.groups()
-        return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+        return f"{int(y)}/{int(m)}/{int(d)}"
 
-    # 正则：MM-DD (短格式)
+    # 正则：MM-DD 或 MM/DD (短格式)
     m_short = re.search(
         r"(?<!\d)(0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])(?!\d)", val_str
     )
     if m_short:
         m, d = m_short.groups()
-        return f"{curr_year:04d}-{int(m):02d}-{int(d):02d}"
+        return f"{curr_year}/{int(m)}/{int(d)}"
 
     return None
 
@@ -115,10 +119,10 @@ def safe_convert_number(raw_val):
 def clean_cell(val):
     """单元格清洗函数"""
     if pd.isna(val):
-        return None
+        return ""
     s = str(val).strip()
     if not s or s.lower() in ["nan", "none", "nat"]:
-        return None
+        return ""
     return s
 
 
@@ -133,8 +137,8 @@ def find_target_column(df, keywords, max_scan_rows=10):
     return None
 
 
-def read_uploaded_file(uploaded_file, key_suffix=""):
-    """统一文件读取工具（自动适配 CSV 编码与 Excel 多 Sheet）"""
+def read_uploaded_file(uploaded_file, key_suffix="", default_keywords=None):
+    """统一文件读取工具（自动适配 CSV 编码与 Excel 多 Sheet 智能识别）"""
     file_name = uploaded_file.name.lower()
 
     if file_name.endswith(".csv"):
@@ -154,7 +158,7 @@ def read_uploaded_file(uploaded_file, key_suffix=""):
     sheet_names = xl_file.sheet_names
 
     default_idx = 0
-    match_sheet_keys = ["主计划", "cr", "cable", "reel", "sbd", "nozzle"]
+    match_sheet_keys = default_keywords or ["主计划", "cr", "cable", "reel", "sbd", "nozzle", "墙挂", "附件"]
     for idx, sheet_name in enumerate(sheet_names):
         if any(key in sheet_name.lower() for key in match_sheet_keys):
             default_idx = idx
@@ -297,7 +301,6 @@ if "Cable Reel" in app_mode:
                 for c, raw_date in col_date_map.items():
                     if c < len(row_values):
                         num = safe_convert_number(row_values[c])
-                        # 仅提取大于 0 的有效数值
                         if num is not None and num > 0:
                             monday_date = get_monday_date(raw_date)
                             raw_records.append(
@@ -375,7 +378,7 @@ if "Cable Reel" in app_mode:
 # ------------------------------------------
 # 模式 2: Floor Nozzle / SBD 格式转换
 # ------------------------------------------
-else:
+elif "Floor Nozzle" in app_mode:
     st.subheader("🧹 Floor Nozzle / SBD 欠料格式转换")
 
     file2 = st.file_uploader(
@@ -423,7 +426,6 @@ else:
                 if not any(row_vals) or "计划库存" in row_str:
                     continue
 
-                # 判定同行或上一行模式
                 nozzle_same = row_vals[0]
                 desc_same = row_vals[1]
                 boxing_same = row_vals[2] if len(row_vals) > 2 else ""
@@ -471,7 +473,6 @@ else:
                 for c, date_str in col_date_map.items():
                     if c < len(row_vals):
                         num = safe_convert_number(row_vals[c])
-                        # 仅提取大于 0 的有效数值
                         if num is not None and num > 0:
                             monday_date = get_monday_date(date_str)
                             records.append(
@@ -552,4 +553,146 @@ else:
         except Exception as e:
             st.error(f"❌ 处理出错: {str(e)}")
             with st.expander("点击查看报错堆栈"):
+                st.code(traceback.format_exc())
+
+# ------------------------------------------
+# 模式 3: 墙挂小附件计划 格式
+# ------------------------------------------
+else:
+    st.subheader("📌 墙挂小附件计划 - 仅计划数量提取")
+
+    file_wall = st.file_uploader(
+        "请上传《墙挂小附件计划》文件 (.xlsx / .xls / .csv)",
+        type=["xlsx", "xls", "csv"],
+        key="uploader_wall",
+    )
+
+    if file_wall:
+        try:
+            # 自动优先匹配“墙挂”或“附件” Sheet
+            df_raw = read_uploaded_file(file_wall, key_suffix="wall", default_keywords=["墙挂", "附件", "nozzle"])
+
+            # 1. 扫描定位包含日期的表头行
+            best_row_idx, max_date_count = None, 0
+            for r in range(min(15, len(df_raw))):
+                row_vals = df_raw.iloc[r].tolist()
+                parsed_vals = [parse_header_date(v) for v in row_vals]
+                date_count = sum(1 for p in parsed_vals if p is not None)
+                if date_count > max_date_count:
+                    max_date_count = date_count
+                    best_row_idx = r
+
+            if best_row_idx is None or max_date_count == 0:
+                st.error("❌ 未能在当前工作表中找到包含排产日期的表头，请确认上方【工作表 (Sheet)】是否选择正确。")
+                st.stop()
+
+            header_row = df_raw.iloc[best_row_idx]
+            col_date_map = {
+                c: parse_header_date(header_row.iloc[c])
+                for c in range(len(header_row))
+                if parse_header_date(header_row.iloc[c])
+            }
+
+            # 2. 核心提取逻辑
+            records = []
+
+            for r in range(best_row_idx + 1, len(df_raw)):
+                row_cells = [clean_cell(df_raw.iloc[r, c]) for c in range(len(df_raw.columns))]
+                row_str = " ".join(row_cells).lower()
+
+                # 过滤：只提取包含“计划”且不包含“计划库存”的行
+                if "计划" not in row_str or "计划库存" in row_str:
+                    continue
+
+                # 获取【同行】A 列（表头：墙挂小附件，索引 0）的内容
+                item_same = clean_cell(df_raw.iloc[r, 0])
+
+                # 逻辑判定：如果同行 A 列包含有效物料号（匹配6位以上数字），直接用同行的；否则取 r - 1 行
+                if item_same and re.search(r"\d{6,}", item_same):
+                    item_no = item_same
+                    desc_same = clean_cell(df_raw.iloc[r, 1])
+                    full_name = desc_same if desc_same else item_no
+                else:
+                    item_no = clean_cell(df_raw.iloc[r - 1, 0]) if r > 0 else ""
+                    desc_prev = clean_cell(df_raw.iloc[r - 1, 1]) if r > 0 else ""
+                    remark_tag = item_same
+                    full_name = f"{desc_prev} ({remark_tag})" if remark_tag and remark_tag != item_no else desc_prev
+
+                if not item_no:
+                    continue
+
+                if digits_only_nozzle:
+                    num_only = re.sub(r"\D", "", item_no)
+                    if num_only:
+                        item_no = num_only
+
+                # 3. 提取对应日期下的计划数量 > 0
+                for c, date_str in col_date_map.items():
+                    if c < len(row_cells):
+                        val_str = row_cells[c].replace(",", "")
+                        try:
+                            num = float(val_str)
+                            if num > 0:
+                                records.append(
+                                    {
+                                        "Floor nozzle": item_no,
+                                        "FullName": full_name,
+                                        "Daily Date": date_str,
+                                        "Monday Date": get_monday_date(date_str),
+                                        "Released": num,
+                                    }
+                                )
+                        except ValueError:
+                            pass
+
+            # 4. 汇总与 Excel 导出
+            if records:
+                df_records = pd.DataFrame(records).astype(
+                    {"Floor nozzle": str, "FullName": str, "Daily Date": str, "Monday Date": str}
+                )
+                df_records["Released"] = pd.to_numeric(df_records["Released"], errors="coerce")
+
+                # 按周汇总
+                df_weekly = (
+                    df_records.groupby(["Floor nozzle", "FullName", "Monday Date"], as_index=False)["Released"]
+                    .sum()
+                )
+                df_weekly["Released"] = df_weekly["Released"].apply(smart_round)
+                df_weekly = df_weekly[df_weekly["Released"] > 0].rename(columns={"Monday Date": "Demand Time"})
+                df_weekly = df_weekly[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+
+                # 按天汇总
+                df_daily = (
+                    df_records.groupby(["Floor nozzle", "FullName", "Daily Date"], as_index=False)["Released"]
+                    .sum()
+                )
+                df_daily["Released"] = df_daily["Released"].apply(smart_round)
+                df_daily = df_daily[df_daily["Released"] > 0].rename(columns={"Daily Date": "Demand Time"})
+                df_daily = df_daily[["Floor nozzle", "FullName", "Demand Time", "Released"]]
+
+                st.subheader("📋 墙挂小附件 - 计划提取成功预览")
+                tab_weekly, tab_daily = st.tabs(["📅 按周汇总 (归集至周一)", "📆 按天汇总 (每日明细)"])
+
+                with tab_weekly:
+                    st.dataframe(df_weekly, use_container_width=True)
+
+                with tab_daily:
+                    st.dataframe(df_daily, use_container_width=True)
+
+                excel_bytes = build_excel_bytes(
+                    {"按周汇总": df_weekly, "按天汇总": df_daily}
+                )
+                now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    label="✅ 下载 墙挂小附件计划导出 Excel",
+                    data=excel_bytes,
+                    file_name=f"墙挂小附件_仅计划汇总_{now_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            else:
+                st.warning("⚠️ 未能从当前 Sheet 提取到包含“计划”的数据，请检查上方【工作表 (Sheet)】是否选择正确。")
+
+        except Exception as e:
+            st.error(f"❌ 处理出错: {str(e)}")
+            with st.expander("点击查看完整报错堆栈"):
                 st.code(traceback.format_exc())
